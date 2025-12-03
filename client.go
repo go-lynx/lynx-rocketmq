@@ -10,9 +10,9 @@ import (
 	"github.com/apache/rocketmq-client-go/v2/consumer"
 	"github.com/apache/rocketmq-client-go/v2/primitive"
 	"github.com/apache/rocketmq-client-go/v2/producer"
-	"github.com/go-lynx/lynx/app/log"
+	"github.com/go-lynx/lynx-rocketmq/conf"
+	"github.com/go-lynx/lynx/log"
 	"github.com/go-lynx/lynx/plugins"
-	"github.com/go-lynx/lynx/plugins/mq/rocketmq/conf"
 	"google.golang.org/protobuf/types/known/durationpb"
 )
 
