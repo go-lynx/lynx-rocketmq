@@ -6,7 +6,7 @@ toolchain go1.25.3
 
 require (
 	github.com/apache/rocketmq-client-go/v2 v2.1.2
-	github.com/go-lynx/lynx v1.5.0
+	github.com/go-lynx/lynx v1.5.2
 	google.golang.org/protobuf v1.36.10
 )
 
