@@ -3,6 +3,8 @@ package rocketmq
 import (
 	"strings"
 	"time"
+
+	"google.golang.org/protobuf/types/known/durationpb"
 )
 
 // validateTopic validates topic name
@@ -94,4 +96,12 @@ func isHealthy(errorCount int64, lastCheck time.Time, maxErrors int64, maxAge ti
 	}
 
 	return true
+}
+
+// consumerPullInterval returns PullInterval duration from config, or default if nil.
+func consumerPullInterval(d *durationpb.Duration) time.Duration {
+	if d != nil {
+		return d.AsDuration()
+	}
+	return parseDuration(defaultPullInterval, 100*time.Millisecond)
 }

@@ -43,12 +43,11 @@ func (r *Client) SubscribeWith(ctx context.Context, consumerName string, topics 
 		return err
 	}
 
-	// Subscribe to topics
-	err = consumerClient.Subscribe(topics[0], consumer.MessageSelector{}, func(ctx context.Context, msgs ...*primitive.MessageExt) (consumer.ConsumeResult, error) {
+	// Shared callback for all topics: handler return error -> ConsumeRetryLater, else ConsumeSuccess
+	consumeCallback := func(ctx context.Context, msgs ...*primitive.MessageExt) (consumer.ConsumeResult, error) {
 		for _, msg := range msgs {
 			start := time.Now()
 
-			// Call user handler
 			if err := handler(ctx, msg); err != nil {
 				r.metrics.IncrementConsumerMessagesFailed()
 				log.Error("Failed to process RocketMQ message", "consumer", consumerName, "topic", msg.Topic, "error", err)
@@ -60,11 +59,15 @@ func (r *Client) SubscribeWith(ctx context.Context, consumerName string, topics 
 			log.Debug("Processed RocketMQ message", "consumer", consumerName, "topic", msg.Topic, "msgId", msg.MsgId)
 		}
 		return consumer.ConsumeSuccess, nil
-	})
+	}
 
-	if err != nil {
-		log.Error("Failed to subscribe to RocketMQ topics", "consumer", consumerName, "topics", topics, "error", err)
-		return WrapError(err, "failed to subscribe to topics")
+	// Subscribe to every topic (each topic requires a separate Subscribe call)
+	for _, topic := range topics {
+		err = consumerClient.Subscribe(topic, consumer.MessageSelector{}, consumeCallback)
+		if err != nil {
+			log.Error("Failed to subscribe to RocketMQ topic", "consumer", consumerName, "topic", topic, "error", err)
+			return WrapError(err, "failed to subscribe to topic: "+topic)
+		}
 	}
 
 	// Start consumer

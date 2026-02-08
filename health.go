@@ -1,28 +1,35 @@
 package rocketmq
 
 import (
+	"net"
 	"sync"
 	"time"
 
 	"github.com/go-lynx/lynx/log"
 )
 
+const nameServerProbeTimeout = 3 * time.Second
+
 // ConnectionManager manages connection health and reconnection
 type ConnectionManager struct {
-	metrics       *Metrics
-	healthChecker *HealthChecker
-	mu            sync.RWMutex
-	connected     bool
-	stopCh        chan struct{}
+	metrics         *Metrics
+	healthChecker   *HealthChecker
+	nameServerAddrs []string
+	mu              sync.RWMutex
+	connected       bool
+	stopCh          chan struct{}
 }
 
-// NewConnectionManager creates a new connection manager
-func NewConnectionManager(metrics *Metrics) *ConnectionManager {
-	return &ConnectionManager{
-		metrics:       metrics,
-		healthChecker: NewHealthChecker(metrics),
-		stopCh:        make(chan struct{}),
+// NewConnectionManager creates a new connection manager.
+// If nameServerAddrs is non-empty, checkConnection will probe RocketMQ by TCP dial to one of the NameServer addresses.
+func NewConnectionManager(metrics *Metrics, nameServerAddrs []string) *ConnectionManager {
+	cm := &ConnectionManager{
+		metrics:         metrics,
+		nameServerAddrs: nameServerAddrs,
+		stopCh:          make(chan struct{}),
 	}
+	cm.healthChecker = NewHealthChecker(metrics, cm)
+	return cm
 }
 
 // Start starts the connection manager
@@ -83,19 +90,32 @@ func (cm *ConnectionManager) run() {
 	}
 }
 
-// checkConnection checks connection health
+// checkConnection checks connection health by probing NameServer when addresses are configured
 func (cm *ConnectionManager) checkConnection() {
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
 
-	// For now, we'll assume connection is healthy if no errors
-	// In a real implementation, you would check actual connection status
-	cm.connected = true
+	if len(cm.nameServerAddrs) == 0 {
+		cm.connected = true
+		return
+	}
+
+	for _, addr := range cm.nameServerAddrs {
+		conn, err := net.DialTimeout("tcp", addr, nameServerProbeTimeout)
+		if err == nil {
+			_ = conn.Close()
+			cm.connected = true
+			return
+		}
+		log.Debug("RocketMQ NameServer probe failed", "addrs", cm.nameServerAddrs, "lastErr", err)
+	}
+	cm.connected = false
 }
 
 // HealthChecker performs health checks
 type HealthChecker struct {
 	metrics     *Metrics
+	connMgr     *ConnectionManager
 	mu          sync.RWMutex
 	healthy     bool
 	lastCheck   time.Time
@@ -104,10 +124,12 @@ type HealthChecker struct {
 	checkTicker *time.Ticker
 }
 
-// NewHealthChecker creates a new health checker
-func NewHealthChecker(metrics *Metrics) *HealthChecker {
+// NewHealthChecker creates a new health checker. When connMgr is non-nil and has NameServer addrs,
+// healthy is derived from connMgr.IsConnected(); otherwise from error count heuristic.
+func NewHealthChecker(metrics *Metrics, connMgr *ConnectionManager) *HealthChecker {
 	return &HealthChecker{
 		metrics:     metrics,
+		connMgr:     connMgr,
 		lastCheck:   time.Now(),
 		stopCh:      make(chan struct{}),
 		checkTicker: time.NewTicker(10 * time.Second),
@@ -168,7 +190,9 @@ func (hc *HealthChecker) run() {
 	}
 }
 
-// performHealthCheck performs a health check
+// performHealthCheck performs a health check.
+// When ConnectionManager has NameServer addrs, health is based on actual TCP probe (IsConnected).
+// Otherwise falls back to error-count heuristic.
 func (hc *HealthChecker) performHealthCheck() {
 	hc.mu.Lock()
 	defer hc.mu.Unlock()
@@ -177,15 +201,19 @@ func (hc *HealthChecker) performHealthCheck() {
 	hc.lastCheck = time.Now()
 	hc.metrics.UpdateLastHealthCheck()
 
-	// For now, we'll assume healthy if error count is low
-	// In a real implementation, you would check actual service health
-	if hc.errorCount < 5 {
+	if hc.connMgr != nil && len(hc.connMgr.nameServerAddrs) > 0 {
+		hc.healthy = hc.connMgr.IsConnected()
+	} else if hc.errorCount < 5 {
 		hc.healthy = true
-		hc.metrics.SetHealthy(true)
 	} else {
 		hc.healthy = false
+	}
+
+	if hc.healthy {
+		hc.metrics.SetHealthy(true)
+	} else {
 		hc.metrics.SetHealthy(false)
 		hc.metrics.IncrementHealthCheckErrors()
-		log.Warn("Health check failed", "errorCount", hc.errorCount)
+		log.Warn("Health check failed", "errorCount", hc.errorCount, "connected", hc.connMgr != nil && hc.connMgr.IsConnected())
 	}
 }

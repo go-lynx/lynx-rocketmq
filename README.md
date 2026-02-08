@@ -127,14 +127,14 @@ func main() {
         return nil
     }
     
-    // Subscribe to topics
+    // Subscribe to one or more topics (all topics in the slice are subscribed)
     err := client.Subscribe(context.Background(), []string{"test-topic"}, handler)
     if err != nil {
         log.Fatal(err)
     }
     
-    // Subscribe with specific consumer
-    err = client.SubscribeWith(context.Background(), "default-consumer", []string{"test-topic"}, handler)
+    // Subscribe with specific consumer to multiple topics
+    err = client.SubscribeWith(context.Background(), "default-consumer", []string{"topic-a", "topic-b"}, handler)
     if err != nil {
         log.Fatal(err)
     }
@@ -198,6 +198,45 @@ if err := client.SendMessage(ctx, topic, body); err != nil {
     }
 }
 ```
+
+## Fixes and Improvements (Changelog)
+
+The following fixes have been applied to improve production readiness and configuration consistency:
+
+### 1. Multi-Topic Subscribe Fix
+
+- **Issue**: When passing multiple topics to `Subscribe`/`SubscribeWith`, only `topics[0]` was passed to the SDK’s `Subscribe`; the rest were never subscribed.
+- **Fix**: Iterate over the full `topics` list and call `Subscribe` once per topic with the same consume callback; return an error and stop if any subscription fails.
+- **Impact**: Passing multiple topics in config or code now correctly subscribes and consumes from all of them.
+
+### 2. Consume Model Configuration (CLUSTERING / BROADCASTING)
+
+- **Issue**: In `createConsumer`, the consume model was hardcoded to `consumer.Clustering`, so `consume_model: BROADCASTING` had no effect.
+- **Fix**: Choose `consumer.Clustering` or `consumer.BroadCasting` from config `ConsumeModel` and pass it to the SDK.
+- **Impact**: With `consume_model: "BROADCASTING"`, consumers run in broadcast mode; otherwise they use clustering (default).
+
+### 3. Consumer Pull and Concurrency Configuration
+
+- **Issue**: `pull_batch_size`, `pull_interval`, and `max_concurrency` were not passed to the RocketMQ client; SDK defaults were used instead.
+- **Fix**: In `createConsumer`, add:
+  - `consumer.WithPullBatchSize(config.PullBatchSize)`
+  - `consumer.WithPullInterval(...)` (with nil-safe handling for `pull_interval`)
+  - `consumer.WithConsumeGoroutineNums(int(config.MaxConcurrency))`
+- **Impact**: These options now control pull batch size, pull interval, and consume goroutine count for tuning and stability.
+
+### 4. Health Check Uses Real RocketMQ Probe
+
+- **Issue**: `ConnectionManager.checkConnection` did not probe RocketMQ and always set `connected = true`, so health did not reflect real connectivity.
+- **Fix**:
+  - `NewConnectionManager` now accepts `nameServerAddrs []string` (from `rocketmq.name_server`).
+  - When `nameServerAddrs` is non-empty, `checkConnection` probes each address with TCP `DialTimeout`; if any succeeds, the connection is considered up, otherwise down.
+  - When a `ConnectionManager` with NameServer addrs is present, `HealthChecker` uses `IsConnected()` for health; otherwise it keeps the previous error-count heuristic.
+- **Impact**: With `name_server` configured, health reflects actual NameServer reachability for deployment and ops.
+
+### 5. Other Notes
+
+- **ACK and consume result**: The consumer still drives SDK `ConsumeRetryLater`/`ConsumeSuccess` via the handler’s return value (“indirect ACK”); there is no separate manual ACK API.
+- **Transactional messages**: The plugin still does not support transactional messages (TransactionProducer); implement or extend at the application layer if needed.
 
 ## Dependencies
 

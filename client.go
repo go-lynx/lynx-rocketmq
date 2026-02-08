@@ -108,8 +108,8 @@ func (r *Client) StartupTasks() error {
 			r.defaultProducer = name
 		}
 
-		// Start connection manager for producer
-		connMgr := NewConnectionManager(r.metrics)
+		// Start connection manager for producer (with NameServer addrs for real health probe)
+		connMgr := NewConnectionManager(r.metrics, r.conf.NameServer)
 		r.prodConnMgrs[name] = connMgr
 		connMgr.Start()
 	}
@@ -136,8 +136,8 @@ func (r *Client) StartupTasks() error {
 			r.defaultConsumer = name
 		}
 
-		// Start connection manager for consumer
-		connMgr := NewConnectionManager(r.metrics)
+		// Start connection manager for consumer (with NameServer addrs for real health probe)
+		connMgr := NewConnectionManager(r.metrics, r.conf.NameServer)
 		r.consConnMgrs[name] = connMgr
 		connMgr.Start()
 	}
@@ -344,13 +344,21 @@ func (r *Client) createProducer(name string, config *conf.Producer) (rocketmq.Pr
 
 // createConsumer creates a RocketMQ consumer
 func (r *Client) createConsumer(name string, config *conf.Consumer) (rocketmq.PushConsumer, error) {
-	// Create consumer options
+	// Consume model: CLUSTERING or BROADCASTING
+	consumeModel := consumer.Clustering
+	if config.ConsumeModel == ConsumeModelBroadcast {
+		consumeModel = consumer.BroadCasting
+	}
+
 	opts := []consumer.Option{
 		consumer.WithNameServer(primitive.NamesrvAddr(r.conf.NameServer)),
 		consumer.WithGroupName(config.GroupName),
 		consumer.WithConsumeFromWhere(consumer.ConsumeFromLastOffset),
-		consumer.WithConsumerModel(consumer.Clustering),
+		consumer.WithConsumerModel(consumeModel),
 		consumer.WithConsumerOrder(config.ConsumeOrder == ConsumeOrderOrderly),
+		consumer.WithPullBatchSize(config.PullBatchSize),
+		consumer.WithPullInterval(consumerPullInterval(config.PullInterval)),
+		consumer.WithConsumeGoroutineNums(int(config.MaxConcurrency)),
 	}
 
 	// Add authentication if provided
