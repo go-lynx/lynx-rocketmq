@@ -3,7 +3,7 @@ package rocketmq
 const (
 	// Plugin metadata
 	pluginName        = "rocketmq"
-	pluginVersion     = "1.0.0"
+	pluginVersion     = "v1.5.4"
 	pluginDescription = "RocketMQ message queue plugin for Lynx framework"
 	confPrefix        = "rocketmq"
 
