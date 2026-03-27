@@ -20,6 +20,7 @@ import (
 type Client struct {
 	*plugins.BasePlugin
 	conf *conf.RocketMQ
+	rt   plugins.Runtime
 	// Multi-instance producers/consumers
 	producers       map[string]rocketmq.Producer
 	consumers       map[string]rocketmq.PushConsumer
@@ -65,6 +66,10 @@ func NewRocketMQClient() *Client {
 
 // InitializeResources initializes RocketMQ resources
 func (r *Client) InitializeResources(rt plugins.Runtime) error {
+	if err := r.BasePlugin.InitializeResources(rt); err != nil {
+		return err
+	}
+	r.rt = rt
 	r.conf = &conf.RocketMQ{}
 
 	// Load configuration
@@ -140,6 +145,42 @@ func (r *Client) StartupTasks() error {
 		connMgr := NewConnectionManager(r.metrics, r.conf.NameServer)
 		r.consConnMgrs[name] = connMgr
 		connMgr.Start()
+	}
+
+	if r.rt != nil {
+		if err := r.rt.RegisterSharedResource(pluginName, r); err != nil {
+			return WrapError(err, "failed to register RocketMQ shared resource")
+		}
+		if len(r.producers) > 0 {
+			if err := r.rt.RegisterPrivateResource("producers", r.producers); err != nil {
+				log.Warn("Failed to register RocketMQ private producers resource", "error", err)
+			}
+		}
+		if len(r.consumers) > 0 {
+			if err := r.rt.RegisterPrivateResource("consumers", r.consumers); err != nil {
+				log.Warn("Failed to register RocketMQ private consumers resource", "error", err)
+			}
+		}
+		if len(r.prodConnMgrs) > 0 {
+			if err := r.rt.RegisterPrivateResource("producer_connection_managers", r.prodConnMgrs); err != nil {
+				log.Warn("Failed to register RocketMQ private producer connection managers resource", "error", err)
+			}
+		}
+		if len(r.consConnMgrs) > 0 {
+			if err := r.rt.RegisterPrivateResource("consumer_connection_managers", r.consConnMgrs); err != nil {
+				log.Warn("Failed to register RocketMQ private consumer connection managers resource", "error", err)
+			}
+		}
+		if r.metrics != nil {
+			if err := r.rt.RegisterPrivateResource("metrics", r.metrics); err != nil {
+				log.Warn("Failed to register RocketMQ private metrics resource", "error", err)
+			}
+		}
+		if r.retryHandler != nil {
+			if err := r.rt.RegisterPrivateResource("retry_handler", r.retryHandler); err != nil {
+				log.Warn("Failed to register RocketMQ private retry handler resource", "error", err)
+			}
+		}
 	}
 
 	log.Info("RocketMQ plugin started successfully")
