@@ -15,7 +15,38 @@ The RocketMQ plugin provides integration with Apache RocketMQ message queue syst
 
 ## Configuration
 
-### Basic Configuration
+### Configuration Options
+
+#### Global Options
+- `name_server` (repeated string, required): List of RocketMQ NameServer addresses. Example: `["127.0.0.1:9876"]`
+- `access_key` (string, optional): Access key for authentication.
+- `secret_key` (string, optional): Secret key for authentication.
+- `dial_timeout` (duration, default: `"3s"`): Connection timeout.
+- `request_timeout` (duration, default: `"30s"`): Request timeout.
+
+#### Producer Configuration
+- `enabled` (bool, default: `false`): Whether to enable the producer.
+- `group_name` (string, default: `"lynx-producer-group"`): Producer group name.
+- `max_retries` (int32, default: `3`): Maximum number of retries.
+- `retry_backoff` (duration, default: `"100ms"`): Retry interval.
+- `send_timeout` (duration, default: `"3s"`): Send message timeout.
+- `name` (string, default: `""`): Producer instance name (for differentiation/routing).
+- `topics` (repeated string, optional): Allowed topics for routing/permissions.
+- `enable_trace` (bool, default: `false`): Whether to enable trace.
+
+#### Consumer Configuration
+- `enabled` (bool, default: `false`): Whether to enable the consumer.
+- `group_name` (string, default: `"lynx-consumer-group"`): Consumer group name.
+- `consume_model` (string, default: `"CLUSTERING"`): Consumption model (`CLUSTERING`, `BROADCASTING`).
+- `consume_order` (string, default: `"CONCURRENTLY"`): Consumption order (`CONCURRENTLY`, `ORDERLY`).
+- `max_concurrency` (int32, default: `1`): Maximum processing concurrency.
+- `pull_batch_size` (int32, default: `32`): Pull batch size.
+- `pull_interval` (duration, default: `"100ms"`): Pull interval.
+- `name` (string, default: `""`): Consumer instance name.
+- `topics` (repeated string, optional): Subscribed topic list.
+- `enable_trace` (bool, default: `false`): Whether to enable trace.
+
+### Basic Configuration Example
 
 ```yaml
 rocketmq:
@@ -26,7 +57,7 @@ rocketmq:
   secret_key: "your-secret-key"
   dial_timeout: "3s"
   request_timeout: "30s"
-  
+
   producers:
     - name: "default-producer"
       enabled: true
@@ -35,46 +66,68 @@ rocketmq:
       retry_backoff: "100ms"
       send_timeout: "3s"
       enable_trace: false
-      
+      topics:
+        - "test-topic"
+        - "user-events"
+    - name: "high-priority-producer"
+      enabled: true
+      group_name: "lynx-high-priority-producer-group"
+      max_retries: 5
+      retry_backoff: "50ms"
+      send_timeout: "1s"
+      enable_trace: true
+      topics:
+        - "critical-events"
+        - "system-alerts"
+    - name: "batch-producer"
+      enabled: true
+      group_name: "lynx-batch-producer-group"
+      max_retries: 2
+      retry_backoff: "200ms"
+      send_timeout: "5s"
+      enable_trace: false
+      topics:
+        - "batch-data"
+        - "analytics-events"
+
   consumers:
     - name: "default-consumer"
       enabled: true
       group_name: "lynx-consumer-group"
       consume_model: "CLUSTERING"
       consume_order: "CONCURRENTLY"
-      max_concurrency: 1
+      max_concurrency: 4
       pull_batch_size: 32
       pull_interval: "100ms"
       enable_trace: false
+      topics:
+        - "test-topic"
+        - "user-events"
+    - name: "ordered-consumer"
+      enabled: true
+      group_name: "lynx-ordered-consumer-group"
+      consume_model: "CLUSTERING"
+      consume_order: "ORDERLY"
+      max_concurrency: 1
+      pull_batch_size: 16
+      pull_interval: "50ms"
+      enable_trace: true
+      topics:
+        - "order-events"
+        - "payment-events"
+    - name: "broadcast-consumer"
+      enabled: true
+      group_name: "lynx-broadcast-consumer-group"
+      consume_model: "BROADCASTING"
+      consume_order: "CONCURRENTLY"
+      max_concurrency: 2
+      pull_batch_size: 64
+      pull_interval: "200ms"
+      enable_trace: false
+      topics:
+        - "system-notifications"
+        - "config-updates"
 ```
-
-### Producer Configuration
-
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `enabled` | bool | false | Whether to enable the producer |
-| `group_name` | string | "lynx-producer-group" | Producer group name |
-| `max_retries` | int | 3 | Maximum number of retries |
-| `retry_backoff` | duration | "100ms" | Retry interval |
-| `send_timeout` | duration | "3s" | Send message timeout |
-| `name` | string | "" | Producer instance name |
-| `topics` | []string | [] | Allowed topics for routing/permissions |
-| `enable_trace` | bool | false | Whether to enable trace |
-
-### Consumer Configuration
-
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `enabled` | bool | false | Whether to enable the consumer |
-| `group_name` | string | "lynx-consumer-group" | Consumer group name |
-| `consume_model` | string | "CLUSTERING" | Consumption model (CLUSTERING/BROADCASTING) |
-| `consume_order` | string | "CONCURRENTLY" | Message consumption order (CONCURRENTLY/ORDERLY) |
-| `max_concurrency` | int | 1 | Maximum processing concurrency |
-| `pull_batch_size` | int | 32 | Pull batch size |
-| `pull_interval` | duration | "100ms" | Pull interval |
-| `name` | string | "" | Consumer instance name |
-| `topics` | []string | [] | Subscribed topic list |
-| `enable_trace` | bool | false | Whether to enable trace |
 
 ## Usage
 

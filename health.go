@@ -1,6 +1,8 @@
 package rocketmq
 
 import (
+	"context"
+	"fmt"
 	"net"
 	"sync"
 	"time"
@@ -17,7 +19,8 @@ type ConnectionManager struct {
 	nameServerAddrs []string
 	mu              sync.RWMutex
 	connected       bool
-	stopCh          chan struct{}
+	cancel          context.CancelFunc
+	wg              sync.WaitGroup
 }
 
 // NewConnectionManager creates a new connection manager.
@@ -26,7 +29,6 @@ func NewConnectionManager(metrics *Metrics, nameServerAddrs []string) *Connectio
 	cm := &ConnectionManager{
 		metrics:         metrics,
 		nameServerAddrs: nameServerAddrs,
-		stopCh:          make(chan struct{}),
 	}
 	cm.healthChecker = NewHealthChecker(metrics, cm)
 	return cm
@@ -34,23 +36,54 @@ func NewConnectionManager(metrics *Metrics, nameServerAddrs []string) *Connectio
 
 // Start starts the connection manager
 func (cm *ConnectionManager) Start() {
-	go cm.run()
+	_ = cm.StartWithContext(context.Background())
+}
+
+// StartWithContext starts the connection manager with a lifecycle context.
+func (cm *ConnectionManager) StartWithContext(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	cm.mu.Lock()
+	if cm.cancel != nil {
+		cm.mu.Unlock()
+		return nil
+	}
+	runCtx, cancel := context.WithCancel(ctx)
+	cm.cancel = cancel
+	cm.mu.Unlock()
+
+	if err := cm.checkConnectionContext(ctx); err != nil {
+		cancel()
+		cm.mu.Lock()
+		cm.cancel = nil
+		cm.mu.Unlock()
+		return err
+	}
+
+	cm.healthChecker.StartWithContext(runCtx)
+	cm.wg.Add(1)
+	go func() {
+		defer cm.wg.Done()
+		cm.run(runCtx)
+	}()
+
+	return nil
 }
 
 // Stop stops the connection manager
 func (cm *ConnectionManager) Stop() {
 	cm.mu.Lock()
-	defer cm.mu.Unlock()
+	cancel := cm.cancel
+	cm.cancel = nil
+	cm.mu.Unlock()
 
-	select {
-	case <-cm.stopCh:
-		// Already stopped
-		return
-	default:
-		close(cm.stopCh)
+	if cancel != nil {
+		cancel()
 	}
-
 	cm.healthChecker.Stop()
+	cm.wg.Wait()
 }
 
 // IsConnected checks if connected
@@ -76,85 +109,122 @@ func (cm *ConnectionManager) ForceReconnect() {
 }
 
 // run runs the connection manager loop
-func (cm *ConnectionManager) run() {
+func (cm *ConnectionManager) run(ctx context.Context) {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 
 	for {
 		select {
-		case <-cm.stopCh:
+		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			cm.checkConnection()
+			if err := cm.checkConnectionContext(ctx); err != nil {
+				log.Debug("RocketMQ connection probe failed", "addrs", cm.nameServerAddrs, "error", err)
+			}
 		}
 	}
 }
 
-// checkConnection checks connection health by probing NameServer when addresses are configured
-func (cm *ConnectionManager) checkConnection() {
-	cm.mu.Lock()
-	defer cm.mu.Unlock()
-
+// checkConnectionContext checks connection health by probing NameServer when addresses are configured.
+func (cm *ConnectionManager) checkConnectionContext(ctx context.Context) error {
 	if len(cm.nameServerAddrs) == 0 {
+		cm.mu.Lock()
 		cm.connected = true
-		return
+		cm.mu.Unlock()
+		return nil
 	}
 
+	dialer := &net.Dialer{Timeout: nameServerProbeTimeout}
+	var lastErr error
 	for _, addr := range cm.nameServerAddrs {
-		conn, err := net.DialTimeout("tcp", addr, nameServerProbeTimeout)
+		if err := ctx.Err(); err != nil {
+			cm.mu.Lock()
+			cm.connected = false
+			cm.mu.Unlock()
+			return err
+		}
+
+		probeCtx, cancel := context.WithTimeout(ctx, nameServerProbeTimeout)
+		conn, err := dialer.DialContext(probeCtx, "tcp", addr)
+		cancel()
 		if err == nil {
 			_ = conn.Close()
+			cm.mu.Lock()
 			cm.connected = true
-			return
+			cm.mu.Unlock()
+			return nil
 		}
-		log.Debug("RocketMQ NameServer probe failed", "addrs", cm.nameServerAddrs, "lastErr", err)
+		lastErr = err
 	}
+	cm.mu.Lock()
 	cm.connected = false
+	cm.mu.Unlock()
+	if lastErr == nil {
+		lastErr = fmt.Errorf("rocketmq nameserver probe failed")
+	}
+	return lastErr
 }
 
 // HealthChecker performs health checks
 type HealthChecker struct {
-	metrics     *Metrics
-	connMgr     *ConnectionManager
-	mu          sync.RWMutex
-	healthy     bool
-	lastCheck   time.Time
-	errorCount  int64
-	stopCh      chan struct{}
-	checkTicker *time.Ticker
+	metrics    *Metrics
+	connMgr    *ConnectionManager
+	mu         sync.RWMutex
+	healthy    bool
+	lastCheck  time.Time
+	errorCount int64
+	cancel     context.CancelFunc
+	wg         sync.WaitGroup
 }
 
 // NewHealthChecker creates a new health checker. When connMgr is non-nil and has NameServer addrs,
 // healthy is derived from connMgr.IsConnected(); otherwise from error count heuristic.
 func NewHealthChecker(metrics *Metrics, connMgr *ConnectionManager) *HealthChecker {
 	return &HealthChecker{
-		metrics:     metrics,
-		connMgr:     connMgr,
-		lastCheck:   time.Now(),
-		stopCh:      make(chan struct{}),
-		checkTicker: time.NewTicker(10 * time.Second),
+		metrics:   metrics,
+		connMgr:   connMgr,
+		lastCheck: time.Now(),
 	}
 }
 
 // Start starts health check
 func (hc *HealthChecker) Start() {
-	go hc.run()
+	hc.StartWithContext(context.Background())
+}
+
+// StartWithContext starts health checks with a lifecycle context.
+func (hc *HealthChecker) StartWithContext(ctx context.Context) {
+	if err := ctx.Err(); err != nil {
+		return
+	}
+
+	hc.mu.Lock()
+	if hc.cancel != nil {
+		hc.mu.Unlock()
+		return
+	}
+	runCtx, cancel := context.WithCancel(ctx)
+	hc.cancel = cancel
+	hc.mu.Unlock()
+
+	hc.wg.Add(1)
+	go func() {
+		defer hc.wg.Done()
+		hc.run(runCtx)
+	}()
 }
 
 // Stop stops health check
 func (hc *HealthChecker) Stop() {
 	hc.mu.Lock()
-	defer hc.mu.Unlock()
+	cancel := hc.cancel
+	hc.cancel = nil
+	hc.mu.Unlock()
 
-	select {
-	case <-hc.stopCh:
-		// Already stopped
-		return
-	default:
-		close(hc.stopCh)
+	if cancel != nil {
+		cancel()
 	}
-
-	hc.checkTicker.Stop()
+	hc.wg.Wait()
 }
 
 // IsHealthy checks if healthy
@@ -179,13 +249,17 @@ func (hc *HealthChecker) GetErrorCount() int {
 }
 
 // run runs the health check loop
-func (hc *HealthChecker) run() {
+func (hc *HealthChecker) run(ctx context.Context) {
+	hc.performHealthCheck(ctx)
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+
 	for {
 		select {
-		case <-hc.stopCh:
+		case <-ctx.Done():
 			return
-		case <-hc.checkTicker.C:
-			hc.performHealthCheck()
+		case <-ticker.C:
+			hc.performHealthCheck(ctx)
 		}
 	}
 }
@@ -193,7 +267,13 @@ func (hc *HealthChecker) run() {
 // performHealthCheck performs a health check.
 // When ConnectionManager has NameServer addrs, health is based on actual TCP probe (IsConnected).
 // Otherwise falls back to error-count heuristic.
-func (hc *HealthChecker) performHealthCheck() {
+func (hc *HealthChecker) performHealthCheck(ctx context.Context) {
+	if hc.connMgr != nil {
+		if err := hc.connMgr.checkConnectionContext(ctx); err != nil {
+			log.Debug("RocketMQ health checker connection probe failed", "error", err)
+		}
+	}
+
 	hc.mu.Lock()
 	defer hc.mu.Unlock()
 

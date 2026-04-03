@@ -2,6 +2,7 @@ package rocketmq
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -91,6 +92,24 @@ func (r *Client) InitializeResources(rt plugins.Runtime) error {
 
 // StartupTasks startup tasks
 func (r *Client) StartupTasks() error {
+	r.ensureLifecycleContext()
+	return r.startupTasksContext(r.ctx)
+}
+
+func (r *Client) startupTasksContext(ctx context.Context) (startErr error) {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	defer func() {
+		if startErr == nil {
+			return
+		}
+		if cleanupErr := r.shutdownTasksContext(context.Background()); cleanupErr != nil {
+			startErr = errors.Join(startErr, cleanupErr)
+		}
+	}()
+
 	// Initialize all enabled producer instances
 	var firstProducerName string
 	for _, p := range r.conf.Producers {
@@ -107,16 +126,24 @@ func (r *Client) StartupTasks() error {
 			return WrapError(err, "failed to create producer: "+name)
 		}
 
+		connMgr := NewConnectionManager(r.metrics, r.conf.NameServer)
+		if err := connMgr.checkConnectionContext(ctx); err != nil {
+			_ = producer.Shutdown()
+			return WrapError(err, "failed to probe producer nameserver: "+name)
+		}
+		if err := connMgr.StartWithContext(r.ctx); err != nil {
+			_ = producer.Shutdown()
+			return WrapError(err, "failed to start producer connection manager: "+name)
+		}
+
+		r.mu.Lock()
 		r.producers[name] = producer
+		r.prodConnMgrs[name] = connMgr
 		if firstProducerName == "" {
 			firstProducerName = name
 			r.defaultProducer = name
 		}
-
-		// Start connection manager for producer (with NameServer addrs for real health probe)
-		connMgr := NewConnectionManager(r.metrics, r.conf.NameServer)
-		r.prodConnMgrs[name] = connMgr
-		connMgr.Start()
+		r.mu.Unlock()
 	}
 
 	// Initialize all enabled consumer instances
@@ -135,16 +162,24 @@ func (r *Client) StartupTasks() error {
 			return WrapError(err, "failed to create consumer: "+name)
 		}
 
+		connMgr := NewConnectionManager(r.metrics, r.conf.NameServer)
+		if err := connMgr.checkConnectionContext(ctx); err != nil {
+			_ = consumer.Shutdown()
+			return WrapError(err, "failed to probe consumer nameserver: "+name)
+		}
+		if err := connMgr.StartWithContext(r.ctx); err != nil {
+			_ = consumer.Shutdown()
+			return WrapError(err, "failed to start consumer connection manager: "+name)
+		}
+
+		r.mu.Lock()
 		r.consumers[name] = consumer
+		r.consConnMgrs[name] = connMgr
 		if firstConsumerName == "" {
 			firstConsumerName = name
 			r.defaultConsumer = name
 		}
-
-		// Start connection manager for consumer (with NameServer addrs for real health probe)
-		connMgr := NewConnectionManager(r.metrics, r.conf.NameServer)
-		r.consConnMgrs[name] = connMgr
-		connMgr.Start()
+		r.mu.Unlock()
 	}
 
 	if r.rt != nil {
@@ -189,46 +224,109 @@ func (r *Client) StartupTasks() error {
 
 // ShutdownTasks shutdown tasks
 func (r *Client) ShutdownTasks() error {
+	return r.shutdownTasksContext(context.Background())
+}
+
+func (r *Client) shutdownTasksContext(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
 	r.mu.Lock()
-	defer r.mu.Unlock()
+	prodConnMgrs := r.prodConnMgrs
+	consConnMgrs := r.consConnMgrs
+	producers := r.producers
+	consumers := r.consumers
+	r.prodConnMgrs = make(map[string]*ConnectionManager)
+	r.consConnMgrs = make(map[string]*ConnectionManager)
+	r.producers = make(map[string]rocketmq.Producer)
+	r.consumers = make(map[string]rocketmq.PushConsumer)
+	r.defaultProducer = ""
+	r.defaultConsumer = ""
+	cancel := r.cancel
+	r.ctx = nil
+	r.cancel = nil
+	r.mu.Unlock()
+
+	if cancel != nil {
+		cancel()
+	}
+
+	var errs []error
 
 	// Stop all connection managers
-	for name, connMgr := range r.prodConnMgrs {
+	for name, connMgr := range prodConnMgrs {
 		connMgr.Stop()
 		log.Info("Stopped producer connection manager", "name", name)
 	}
 
-	for name, connMgr := range r.consConnMgrs {
+	for name, connMgr := range consConnMgrs {
 		connMgr.Stop()
 		log.Info("Stopped consumer connection manager", "name", name)
 	}
 
 	// Shutdown all producers
-	for name, producer := range r.producers {
-		if err := producer.Shutdown(); err != nil {
+	for name, producer := range producers {
+		if err := runShutdownWithContext(ctx, "producer "+name, producer.Shutdown); err != nil {
 			log.Error("Failed to shutdown producer", "name", name, "error", err)
+			errs = append(errs, err)
 		} else {
 			log.Info("Shutdown producer", "name", name)
 		}
 	}
 
 	// Shutdown all consumers
-	for name, consumer := range r.consumers {
-		if err := consumer.Shutdown(); err != nil {
+	for name, consumer := range consumers {
+		if err := runShutdownWithContext(ctx, "consumer "+name, consumer.Shutdown); err != nil {
 			log.Error("Failed to shutdown consumer", "name", name, "error", err)
+			errs = append(errs, err)
 		} else {
 			log.Info("Shutdown consumer", "name", name)
 		}
 	}
 
-	r.cancel()
 	log.Info("RocketMQ plugin shutdown completed")
-	return nil
+	return errors.Join(errs...)
 }
 
 // GetMetrics gets monitoring metrics
 func (r *Client) GetMetrics() *Metrics {
 	return r.metrics
+}
+
+func (r *Client) ensureLifecycleContext() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if r.ctx != nil {
+		select {
+		case <-r.ctx.Done():
+			r.ctx = nil
+			r.cancel = nil
+		default:
+			return
+		}
+	}
+
+	r.ctx, r.cancel = context.WithCancel(context.Background())
+}
+
+func runShutdownWithContext(ctx context.Context, component string, shutdown func() error) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("%s shutdown canceled before execution: %w", component, err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- shutdown()
+	}()
+
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		return fmt.Errorf("%s shutdown canceled: %w", component, ctx.Err())
+	}
 }
 
 // validateConfiguration validates the configuration
