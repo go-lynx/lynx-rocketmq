@@ -100,6 +100,7 @@ func (r *Client) startupTasksContext(ctx context.Context) (startErr error) {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	r.publishRuntimeContract(false, false)
 
 	defer func() {
 		if startErr == nil {
@@ -186,6 +187,10 @@ func (r *Client) startupTasksContext(ctx context.Context) (startErr error) {
 		if err := r.rt.RegisterSharedResource(pluginName, r); err != nil {
 			return WrapError(err, "failed to register RocketMQ shared resource")
 		}
+		r.registerRuntimePluginAlias()
+		if err := r.rt.RegisterPrivateResource("config", r.conf); err != nil {
+			log.Warn("Failed to register RocketMQ private config resource", "error", err)
+		}
 		if len(r.producers) > 0 {
 			if err := r.rt.RegisterPrivateResource("producers", r.producers); err != nil {
 				log.Warn("Failed to register RocketMQ private producers resource", "error", err)
@@ -218,6 +223,12 @@ func (r *Client) startupTasksContext(ctx context.Context) (startErr error) {
 		}
 	}
 
+	if err := r.CheckHealth(); err != nil {
+		r.publishRuntimeContract(false, false)
+		return err
+	}
+	r.publishRuntimeContract(true, true)
+
 	log.Info("RocketMQ plugin started successfully")
 	return nil
 }
@@ -231,6 +242,7 @@ func (r *Client) shutdownTasksContext(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	r.publishRuntimeContract(false, false)
 
 	r.mu.Lock()
 	prodConnMgrs := r.prodConnMgrs
