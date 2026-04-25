@@ -5,8 +5,8 @@ rocketmq:
     - "127.0.0.1:9877"
   
   # Authentication (optional, for ACL enabled clusters)
-  access_key: "your-access-key"
-  secret_key: "your-secret-key"
+  access_key: ""
+  secret_key: ""  # Inject through a secret manager when ACL is enabled
   
   # Connection settings
   dial_timeout: "3s"
