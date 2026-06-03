@@ -66,6 +66,11 @@ func (cm *ConnectionManager) StartWithContext(ctx context.Context) error {
 	cm.wg.Add(1)
 	go func() {
 		defer cm.wg.Done()
+		defer func() {
+			if r := recover(); r != nil {
+				log.Errorf("rocketmq connection manager run panic: %v", r)
+			}
+		}()
 		cm.run(runCtx)
 	}()
 
@@ -210,6 +215,11 @@ func (hc *HealthChecker) StartWithContext(ctx context.Context) {
 	hc.wg.Add(1)
 	go func() {
 		defer hc.wg.Done()
+		defer func() {
+			if r := recover(); r != nil {
+				log.Errorf("rocketmq health checker run panic: %v", r)
+			}
+		}()
 		hc.run(runCtx)
 	}()
 }
