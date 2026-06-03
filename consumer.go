@@ -2,6 +2,7 @@ package rocketmq
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/apache/rocketmq-client-go/v2"
@@ -43,20 +44,41 @@ func (r *Client) SubscribeWith(ctx context.Context, consumerName string, topics 
 		return err
 	}
 
-	// Shared callback for all topics: handler return error -> ConsumeRetryLater, else ConsumeSuccess
-	consumeCallback := func(ctx context.Context, msgs ...*primitive.MessageExt) (consumer.ConsumeResult, error) {
+	// Shared callback for all topics.
+	// A panic inside the user-supplied handler is recovered so that the broker
+	// is instructed to redeliver the message rather than losing it silently.
+	// A handler error causes ConsumeRetryLater (dead-letter logic is handled by
+	// the broker after MaxReconsumeTimes is exceeded).
+	consumeCallback := func(ctx context.Context, msgs ...*primitive.MessageExt) (result consumer.ConsumeResult, cbErr error) {
 		for _, msg := range msgs {
 			start := time.Now()
 
-			if err := handler(ctx, msg); err != nil {
-				r.metrics.IncrementConsumerMessagesFailed()
-				log.Error("Failed to process RocketMQ message", "consumer", consumerName, "topic", msg.Topic, "error", err)
-				return consumer.ConsumeRetryLater, err
-			}
+			func() {
+				defer func() {
+					if rec := recover(); rec != nil {
+						r.metrics.IncrementConsumerMessagesFailed()
+						log.Error("Panic in RocketMQ message handler", "consumer", consumerName, "topic", msg.Topic, "panic", rec)
+						result = consumer.ConsumeRetryLater
+						cbErr = fmt.Errorf("handler panic: %v", rec)
+					}
+				}()
 
-			r.metrics.RecordConsumerLatency(time.Since(start))
-			r.metrics.IncrementConsumerMessagesReceived()
-			log.Debug("Processed RocketMQ message", "consumer", consumerName, "topic", msg.Topic, "msgId", msg.MsgId)
+				if err := handler(ctx, msg); err != nil {
+					r.metrics.IncrementConsumerMessagesFailed()
+					log.Error("Failed to process RocketMQ message", "consumer", consumerName, "topic", msg.Topic, "error", err)
+					result = consumer.ConsumeRetryLater
+					cbErr = err
+					return
+				}
+
+				r.metrics.RecordConsumerLatency(time.Since(start))
+				r.metrics.IncrementConsumerMessagesReceived()
+				log.Debug("Processed RocketMQ message", "consumer", consumerName, "topic", msg.Topic, "msgId", msg.MsgId)
+			}()
+
+			if cbErr != nil {
+				return result, cbErr
+			}
 		}
 		return consumer.ConsumeSuccess, nil
 	}

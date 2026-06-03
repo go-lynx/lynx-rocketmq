@@ -85,19 +85,6 @@ func parseDuration(durationStr string, defaultDuration time.Duration) time.Durat
 	return duration
 }
 
-// isHealthy checks if the service is healthy based on error count and last check time
-func isHealthy(errorCount int64, lastCheck time.Time, maxErrors int64, maxAge time.Duration) bool {
-	if errorCount > maxErrors {
-		return false
-	}
-
-	if time.Since(lastCheck) > maxAge {
-		return false
-	}
-
-	return true
-}
-
 // consumerPullInterval returns PullInterval duration from config, or default if nil.
 func consumerPullInterval(d *durationpb.Duration) time.Duration {
 	if d != nil {

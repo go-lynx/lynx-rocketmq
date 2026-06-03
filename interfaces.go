@@ -68,10 +68,10 @@ type ClientInterface interface {
 
 // MetricsProvider monitoring metrics provider interface
 type MetricsProvider interface {
-	// GetStats gets statistics
-	GetStats() map[string]interface{}
+	// GetStats returns a point-in-time snapshot of all counters.
+	GetStats() Stats
 
-	// Reset resets metrics
+	// Reset zeroes all in-process counters.
 	Reset()
 }
 
