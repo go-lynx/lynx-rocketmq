@@ -73,24 +73,22 @@ func (r *Client) InitializeResources(rt plugins.Runtime) error {
 	r.rt = rt
 	r.conf = &conf.RocketMQ{}
 
-	// Load configuration
 	err := rt.GetConfig().Value(confPrefix).Scan(r.conf)
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrInvalidConfiguration, err)
 	}
 
-	// Validate configuration
 	if err := r.validateConfiguration(); err != nil {
 		return err
 	}
 
-	// Set default values
 	r.setDefaultValues()
 
 	return nil
 }
 
-// StartupTasks startup tasks
+// StartupTasks creates all enabled producers/consumers and their connection
+// managers, registers runtime resources, and publishes the readiness contract.
 func (r *Client) StartupTasks() error {
 	r.ensureLifecycleContext()
 	return r.startupTasksContext(r.ctx)
@@ -233,7 +231,8 @@ func (r *Client) startupTasksContext(ctx context.Context) (startErr error) {
 	return nil
 }
 
-// ShutdownTasks shutdown tasks
+// ShutdownTasks cancels the lifecycle context, stops connection managers, and
+// shuts down every producer and consumer, joining any errors.
 func (r *Client) ShutdownTasks() error {
 	return r.shutdownTasksContext(context.Background())
 }
@@ -244,6 +243,8 @@ func (r *Client) shutdownTasksContext(ctx context.Context) error {
 	}
 	r.publishRuntimeContract(false, false)
 
+	// Snapshot and clear shared state under the lock, then tear down the
+	// captured instances outside it so Shutdown calls don't hold the mutex.
 	r.mu.Lock()
 	prodConnMgrs := r.prodConnMgrs
 	consConnMgrs := r.consConnMgrs
@@ -266,7 +267,6 @@ func (r *Client) shutdownTasksContext(ctx context.Context) error {
 
 	var errs []error
 
-	// Stop all connection managers
 	for name, connMgr := range prodConnMgrs {
 		connMgr.Stop()
 		log.Info("Stopped producer connection manager", "name", name)
@@ -277,7 +277,6 @@ func (r *Client) shutdownTasksContext(ctx context.Context) error {
 		log.Info("Stopped consumer connection manager", "name", name)
 	}
 
-	// Shutdown all producers
 	for name, producer := range producers {
 		if err := runShutdownWithContext(ctx, "producer "+name, producer.Shutdown); err != nil {
 			log.Error("Failed to shutdown producer", "name", name, "error", err)
@@ -287,7 +286,6 @@ func (r *Client) shutdownTasksContext(ctx context.Context) error {
 		}
 	}
 
-	// Shutdown all consumers
 	for name, consumer := range consumers {
 		if err := runShutdownWithContext(ctx, "consumer "+name, consumer.Shutdown); err != nil {
 			log.Error("Failed to shutdown consumer", "name", name, "error", err)
@@ -301,7 +299,7 @@ func (r *Client) shutdownTasksContext(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
-// GetMetrics gets monitoring metrics
+// GetMetrics returns the shared metrics collector for this client.
 func (r *Client) GetMetrics() *Metrics {
 	return r.metrics
 }
@@ -341,13 +339,11 @@ func runShutdownWithContext(ctx context.Context, component string, shutdown func
 	}
 }
 
-// validateConfiguration validates the configuration
 func (r *Client) validateConfiguration() error {
 	if len(r.conf.NameServer) == 0 {
 		return ErrMissingNameServer
 	}
 
-	// Validate producers
 	for _, p := range r.conf.Producers {
 		if p == nil || !p.Enabled {
 			continue
@@ -357,7 +353,6 @@ func (r *Client) validateConfiguration() error {
 		}
 	}
 
-	// Validate consumers
 	for _, c := range r.conf.Consumers {
 		if c == nil || !c.Enabled {
 			continue
@@ -370,7 +365,6 @@ func (r *Client) validateConfiguration() error {
 	return nil
 }
 
-// validateProducerConfig validates producer configuration
 func (r *Client) validateProducerConfig(p *conf.Producer) error {
 	if p.GroupName == "" {
 		p.GroupName = defaultProducerGroup
@@ -389,7 +383,6 @@ func (r *Client) validateProducerConfig(p *conf.Producer) error {
 	return nil
 }
 
-// validateConsumerConfig validates consumer configuration
 func (r *Client) validateConsumerConfig(c *conf.Consumer) error {
 	if c.GroupName == "" {
 		c.GroupName = defaultConsumerGroup
@@ -416,9 +409,9 @@ func (r *Client) validateConsumerConfig(c *conf.Consumer) error {
 	return nil
 }
 
-// setDefaultValues sets default values for configuration
+// setDefaultValues fills in default timeouts, retry counts, and concurrency
+// settings for any config fields left unset (see constants.go for the values).
 func (r *Client) setDefaultValues() {
-	// Set default timeouts if not specified
 	if r.conf.DialTimeout == nil {
 		r.conf.DialTimeout = durationpb.New(parseDuration(defaultDialTimeout, 3*time.Second))
 	}
@@ -427,7 +420,6 @@ func (r *Client) setDefaultValues() {
 		r.conf.RequestTimeout = durationpb.New(parseDuration(defaultRequestTimeout, 30*time.Second))
 	}
 
-	// Set producer defaults
 	for _, p := range r.conf.Producers {
 		if p == nil {
 			continue
@@ -443,7 +435,6 @@ func (r *Client) setDefaultValues() {
 		}
 	}
 
-	// Set consumer defaults
 	for _, c := range r.conf.Consumers {
 		if c == nil {
 			continue
@@ -460,9 +451,9 @@ func (r *Client) setDefaultValues() {
 	}
 }
 
-// createProducer creates a RocketMQ producer
+// createProducer builds, starts, and returns a RocketMQ producer for the given
+// instance config, applying credentials only when both access and secret keys are set.
 func (r *Client) createProducer(name string, config *conf.Producer) (rocketmq.Producer, error) {
-	// Create producer options
 	opts := []producer.Option{
 		producer.WithNameServer(primitive.NamesrvAddr(r.conf.NameServer)),
 		producer.WithGroupName(config.GroupName),
@@ -470,7 +461,6 @@ func (r *Client) createProducer(name string, config *conf.Producer) (rocketmq.Pr
 		producer.WithSendMsgTimeout(config.SendTimeout.AsDuration()),
 	}
 
-	// Add authentication if provided
 	if r.conf.AccessKey != "" && r.conf.SecretKey != "" {
 		opts = append(opts, producer.WithCredentials(primitive.Credentials{
 			AccessKey: r.conf.AccessKey,
@@ -478,13 +468,11 @@ func (r *Client) createProducer(name string, config *conf.Producer) (rocketmq.Pr
 		}))
 	}
 
-	// Create producer
 	producer, err := rocketmq.NewProducer(opts...)
 	if err != nil {
 		return nil, WrapError(err, "failed to create producer")
 	}
 
-	// Start producer
 	if err := producer.Start(); err != nil {
 		return nil, WrapError(err, "failed to start producer")
 	}
@@ -493,9 +481,11 @@ func (r *Client) createProducer(name string, config *conf.Producer) (rocketmq.Pr
 	return producer, nil
 }
 
-// createConsumer creates a RocketMQ consumer
+// createConsumer builds a RocketMQ push consumer for the given instance config.
+// The consumer is returned un-started; Subscribe starts it after topics are bound.
 func (r *Client) createConsumer(name string, config *conf.Consumer) (rocketmq.PushConsumer, error) {
-	// Consume model: CLUSTERING or BROADCASTING
+	// CLUSTERING load-balances messages across the group; BROADCASTING delivers
+	// every message to all instances.
 	consumeModel := consumer.Clustering
 	if config.ConsumeModel == ConsumeModelBroadcast {
 		consumeModel = consumer.BroadCasting
@@ -512,7 +502,6 @@ func (r *Client) createConsumer(name string, config *conf.Consumer) (rocketmq.Pu
 		consumer.WithConsumeGoroutineNums(int(config.MaxConcurrency)),
 	}
 
-	// Add authentication if provided
 	if r.conf.AccessKey != "" && r.conf.SecretKey != "" {
 		opts = append(opts, consumer.WithCredentials(primitive.Credentials{
 			AccessKey: r.conf.AccessKey,
@@ -520,7 +509,6 @@ func (r *Client) createConsumer(name string, config *conf.Consumer) (rocketmq.Pu
 		}))
 	}
 
-	// Create consumer
 	consumer, err := rocketmq.NewPushConsumer(opts...)
 	if err != nil {
 		return nil, WrapError(err, "failed to create consumer")

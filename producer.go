@@ -31,7 +31,6 @@ func (r *Client) SendMessageWith(ctx context.Context, producerName, topic string
 		r.metrics.RecordProducerLatency(time.Since(start))
 	}()
 
-	// Validate parameters
 	if err := validateTopic(topic); err != nil {
 		r.metrics.IncrementProducerMessagesFailed()
 		return WrapError(err, "invalid topic")
@@ -42,17 +41,16 @@ func (r *Client) SendMessageWith(ctx context.Context, producerName, topic string
 		return ErrEmptyMessage
 	}
 
-	// Get producer
 	producer, err := r.GetProducer(producerName)
 	if err != nil {
 		r.metrics.IncrementProducerMessagesFailed()
 		return err
 	}
 
-	// Create message
 	msg := primitive.NewMessage(topic, body)
 
-	// Send message with retry
+	// SendSync is retried with backoff; the broker also performs its own
+	// internal retries up to the producer's configured MaxRetries.
 	err = r.retryHandler.DoWithRetry(ctx, func() error {
 		_, err := producer.SendSync(ctx, msg)
 		return err
@@ -76,7 +74,6 @@ func (r *Client) SendMessageSyncWith(ctx context.Context, producerName, topic st
 		r.metrics.RecordProducerLatency(time.Since(start))
 	}()
 
-	// Validate parameters
 	if err := validateTopic(topic); err != nil {
 		r.metrics.IncrementProducerMessagesFailed()
 		return nil, WrapError(err, "invalid topic")
@@ -87,17 +84,14 @@ func (r *Client) SendMessageSyncWith(ctx context.Context, producerName, topic st
 		return nil, ErrEmptyMessage
 	}
 
-	// Get producer
 	producer, err := r.GetProducer(producerName)
 	if err != nil {
 		r.metrics.IncrementProducerMessagesFailed()
 		return nil, err
 	}
 
-	// Create message
 	msg := primitive.NewMessage(topic, body)
 
-	// Send message with retry
 	var result *primitive.SendResult
 	err = r.retryHandler.DoWithRetry(ctx, func() error {
 		var sendErr error
@@ -123,7 +117,6 @@ func (r *Client) SendMessageAsyncWith(ctx context.Context, producerName, topic s
 		r.metrics.RecordProducerLatency(time.Since(start))
 	}()
 
-	// Validate parameters
 	if err := validateTopic(topic); err != nil {
 		r.metrics.IncrementProducerMessagesFailed()
 		return WrapError(err, "invalid topic")
@@ -134,17 +127,16 @@ func (r *Client) SendMessageAsyncWith(ctx context.Context, producerName, topic s
 		return ErrEmptyMessage
 	}
 
-	// Get producer
 	producer, err := r.GetProducer(producerName)
 	if err != nil {
 		r.metrics.IncrementProducerMessagesFailed()
 		return err
 	}
 
-	// Create message
 	msg := primitive.NewMessage(topic, body)
 
-	// Send message asynchronously
+	// Async send: success/failure is reported via the callback, not the return
+	// value (which only surfaces submission errors).
 	err = producer.SendAsync(ctx, func(ctx context.Context, result *primitive.SendResult, err error) {
 		if err != nil {
 			r.metrics.IncrementProducerMessagesFailed()
@@ -195,8 +187,7 @@ func (r *Client) IsProducerReady(name string) bool {
 		return false
 	}
 
-	// Check if producer is running
-	// Note: RocketMQ producer doesn't have a direct "ready" method
-	// We can check if it's not nil and assume it's ready if it was created successfully
+	// The RocketMQ client exposes no readiness probe, so a registered, non-nil
+	// producer is treated as ready.
 	return producer != nil
 }

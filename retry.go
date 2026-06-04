@@ -30,33 +30,30 @@ func (r *RetryHandler) DoWithRetry(ctx context.Context, operation func() error) 
 	backoff := r.config.BackoffTime
 
 	for attempt := 0; attempt <= r.config.MaxRetries; attempt++ {
-		// Check if context is cancelled
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		default:
 		}
 
-		// Execute operation
 		if err := operation(); err == nil {
 			return nil
 		} else {
 			lastErr = err
 		}
 
-		// If this is the last attempt, don't wait
+		// Last attempt: return the error without sleeping again.
 		if attempt == r.config.MaxRetries {
 			break
 		}
 
-		// Wait before retry
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-time.After(backoff):
 		}
 
-		// Exponential backoff with max limit
+		// Double the backoff each round, capped at MaxBackoff.
 		backoff *= 2
 		if backoff > r.config.MaxBackoff {
 			backoff = r.config.MaxBackoff

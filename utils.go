@@ -13,12 +13,11 @@ func validateTopic(topic string) error {
 		return ErrEmptyTopic
 	}
 
-	// Basic validation for RocketMQ topic naming
 	if len(topic) > 255 {
 		return WrapError(ErrInvalidTopic, "topic name too long")
 	}
 
-	// Check for invalid characters
+	// RocketMQ rejects these characters in topic names.
 	invalidChars := []string{"%", "&", "*", "+", "/", "\\", ":", "|", "<", ">", "?", " "}
 	for _, char := range invalidChars {
 		if strings.Contains(topic, char) {
@@ -35,12 +34,11 @@ func validateGroupName(groupName string) error {
 		return ErrInvalidGroupName
 	}
 
-	// Basic validation for RocketMQ group naming
 	if len(groupName) > 255 {
 		return WrapError(ErrInvalidGroupName, "group name too long")
 	}
 
-	// Check for invalid characters
+	// RocketMQ rejects these characters in group names.
 	invalidChars := []string{"%", "&", "*", "+", "/", "\\", ":", "|", "<", ">", "?", " "}
 	for _, char := range invalidChars {
 		if strings.Contains(groupName, char) {

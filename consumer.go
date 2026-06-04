@@ -23,7 +23,6 @@ func (r *Client) SubscribeWith(ctx context.Context, consumerName string, topics 
 		r.metrics.RecordConsumerLatency(time.Since(start))
 	}()
 
-	// Validate parameters
 	if len(topics) == 0 {
 		return WrapError(ErrInvalidTopic, "no topics provided")
 	}
@@ -38,7 +37,6 @@ func (r *Client) SubscribeWith(ctx context.Context, consumerName string, topics 
 		return WrapError(ErrConsumeMessageFailed, "message handler is nil")
 	}
 
-	// Get consumer
 	consumerClient, err := r.GetConsumer(consumerName)
 	if err != nil {
 		return err
@@ -92,7 +90,6 @@ func (r *Client) SubscribeWith(ctx context.Context, consumerName string, topics 
 		}
 	}
 
-	// Start consumer
 	if err := consumerClient.Start(); err != nil {
 		log.Error("Failed to start RocketMQ consumer", "consumer", consumerName, "error", err)
 		return WrapError(err, "failed to start consumer")
@@ -133,8 +130,7 @@ func (r *Client) IsConsumerReady(name string) bool {
 		return false
 	}
 
-	// Check if consumer is running
-	// Note: RocketMQ consumer doesn't have a direct "ready" method
-	// We can check if it's not nil and assume it's ready if it was created successfully
+	// The RocketMQ client exposes no readiness probe, so a registered, non-nil
+	// consumer is treated as ready.
 	return consumer != nil
 }
