@@ -48,21 +48,14 @@ type Consumer interface {
 	IsConsumerReady(name string) bool
 }
 
-// ClientInterface RocketMQ client interface
+// ClientInterface is the full RocketMQ client contract: producer, consumer, and lifecycle.
 type ClientInterface interface {
 	Producer
 	Consumer
 
-	// InitializeResources initializes resources
 	InitializeResources(rt plugins.Runtime) error
-
-	// StartupTasks startup tasks
 	StartupTasks() error
-
-	// ShutdownTasks shutdown tasks
 	ShutdownTasks() error
-
-	// GetMetrics gets monitoring metrics
 	GetMetrics() *Metrics
 }
 
@@ -75,36 +68,20 @@ type MetricsProvider interface {
 	Reset()
 }
 
-// HealthCheckerInterface health checker interface
+// HealthCheckerInterface runs periodic connectivity probes and tracks error counts.
 type HealthCheckerInterface interface {
-	// Start starts health check
 	Start()
-
-	// Stop stops health check
 	Stop()
-
-	// IsHealthy checks if healthy
 	IsHealthy() bool
-
-	// GetLastCheck gets last check time
 	GetLastCheck() time.Time
-
-	// GetErrorCount gets error count
 	GetErrorCount() int
 }
 
-// ConnectionManagerInterface connection manager interface
+// ConnectionManagerInterface manages the active broker connection and owns a HealthChecker.
 type ConnectionManagerInterface interface {
-	// Start starts connection manager
 	Start()
-
-	// Stop stops connection manager
 	Stop()
-
-	// IsConnected checks if connected
 	IsConnected() bool
-
-	// GetHealthChecker gets health checker
 	GetHealthChecker() HealthCheckerInterface
 
 	// ForceReconnect forces reconnection

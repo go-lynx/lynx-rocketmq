@@ -65,7 +65,7 @@ func NewRocketMQClient() *Client {
 	}
 }
 
-// InitializeResources initializes RocketMQ resources
+// InitializeResources scans RocketMQ configuration and validates it.
 func (r *Client) InitializeResources(rt plugins.Runtime) error {
 	if err := r.BasePlugin.InitializeResources(rt); err != nil {
 		return err
