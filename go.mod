@@ -6,7 +6,7 @@ toolchain go1.26.2
 
 require (
 	github.com/apache/rocketmq-client-go/v2 v2.1.2
-	github.com/go-lynx/lynx v1.6.1
+	github.com/go-lynx/lynx v1.6.2
 	github.com/prometheus/client_golang v1.23.2
 	google.golang.org/protobuf v1.36.10
 )
@@ -53,7 +53,7 @@ require (
 	golang.org/x/sync v0.19.0 // indirect
 	golang.org/x/sys v0.39.0 // indirect
 	golang.org/x/term v0.38.0 // indirect
-	golang.org/x/tools v0.0.0-20201224043029-2b0845dc783e // indirect
+	golang.org/x/tools v0.39.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20251202230838-ff82c1b0f217 // indirect
 	google.golang.org/grpc v1.79.3 // indirect
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1 // indirect
