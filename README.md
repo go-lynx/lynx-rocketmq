@@ -23,14 +23,15 @@ Important compatibility notes:
 ## Example configuration
 
 ```yaml
-rocketmq:
-  name_server:
-    - "127.0.0.1:9876"
-    - "127.0.0.1:9877"
-  access_key: "your-access-key"
-  secret_key: "your-secret-key"
-  dial_timeout: "3s"
-  request_timeout: "30s"
+lynx:
+  rocketmq:
+    name_server:
+      - "127.0.0.1:9876"
+      - "127.0.0.1:9877"
+    access_key: "your-access-key"
+    secret_key: "your-secret-key"
+    dial_timeout: "3s"
+    request_timeout: "30s"
 
   producers:
     - name: "default-producer"

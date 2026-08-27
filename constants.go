@@ -5,7 +5,7 @@ const (
 	pluginName        = "rocketmq"
 	pluginVersion     = "v1.6.3"
 	pluginDescription = "RocketMQ message queue plugin for Lynx framework"
-	confPrefix        = "rocketmq"
+	confPrefix        = "lynx.rocketmq"
 
 	// Default values
 	defaultDialTimeout    = "3s"
